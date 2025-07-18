@@ -31,10 +31,12 @@ class RLVRWorkflow(RolloutWorkflow):
             add_generation_prompt=True,
             enable_thinking=self.enable_thinking,
         )
+        prompts_new = self.tokenizer.decode(input_ids)
         n_samples = self.gconfig.n_samples
         req = LLMRequest(
             rid=uuid.uuid4().hex,
             input_ids=input_ids,
+            prompt = prompts_new,
             gconfig=self.gconfig.new(n_samples=1),
         )
         resps = await asyncio.gather(*[engine.agenerate(req) for _ in range(n_samples)])
