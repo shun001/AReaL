@@ -204,8 +204,11 @@ def main_grpo():
                 comm_backend=None,
                 model_version=global_step + 1,
             )
-            if dist.get_rank() == 0:
-                rollout.update_weights(meta)
+            # if dist.get_rank() == 0:
+
+            # FIXME meta.path 需要更新，不能使用sglang的路径
+
+            rollout.update_weights(meta)
             actor.upload_weights(meta)
             # if dist.get_rank() == 0:
             #     future.result()
@@ -216,34 +219,35 @@ def main_grpo():
         with stats_tracker.record_timing("save"):
             saver.save(actor, epoch, step, global_step)
 
-        with stats_tracker.record_timing("eval"):
-
-            def evaluate_fn():
-                rollout.pause()
-                cnt = 0
-                for data in valid_dataloader:
-                    for item in data:
-                        eval_rollout.submit(item, workflow)
-                        cnt += 1
-                batch = eval_rollout.wait(cnt, timeout=None)
-                rewards = batch["rewards"].float().to(actor.device)
-                with stats_tracker.scope("grpo-eval"):
-                    stats_tracker.denominator(
-                        n_seqs=torch.ones(
-                            rewards.shape[0],
-                            device=rewards.device,
-                            dtype=torch.bool,
-                        )
-                    )
-                    stats_tracker.stat(task_reward=rewards, denominator="n_seqs")
-                rollout.resume()
-
-            evaluator.evaluate(
-                evaluate_fn,
-                epoch,
-                step,
-                global_step,
-            )
+        # FIXME
+        # with stats_tracker.record_timing("eval"):
+        #
+        #     def evaluate_fn():
+        #         rollout.pause()
+        #         cnt = 0
+        #         for data in valid_dataloader:
+        #             for item in data:
+        #                 eval_rollout.submit(item, workflow)
+        #                 cnt += 1
+        #         batch = eval_rollout.wait(cnt, timeout=None)
+        #         rewards = batch["rewards"].float().to(actor.device)
+        #         with stats_tracker.scope("grpo-eval"):
+        #             stats_tracker.denominator(
+        #                 n_seqs=torch.ones(
+        #                     rewards.shape[0],
+        #                     device=rewards.device,
+        #                     dtype=torch.bool,
+        #                 )
+        #             )
+        #             stats_tracker.stat(task_reward=rewards, denominator="n_seqs")
+        #         rollout.resume()
+        #
+        #     evaluator.evaluate(
+        #         evaluate_fn,
+        #         epoch,
+        #         step,
+        #         global_step,
+        #     )
 
         logger.commit(epoch, step, global_step, stats)
 

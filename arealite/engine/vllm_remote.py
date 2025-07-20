@@ -75,13 +75,13 @@ class RemotevLLMEngine(InferenceEngine):
 
         self._version = 0
 
-    def _wait_for_server(self, address):
+    def _wait_for_server(self, address, sleep_time=1):
         base_url = f"http://{address}"
         tik = time.time()
         while time.time() - tik < self.config.setup_timeout:
             if self.check_health(base_url):
                 return
-            time.sleep(1)
+            time.sleep(sleep_time)
         raise RuntimeError("server launch failed")
 
     def check_health(self, base_url):
@@ -308,18 +308,30 @@ class RemotevLLMEngine(InferenceEngine):
             rank = int(os.getenv("RANK"))
             if rank == 0 :
                 # only restart vllm engine from rank 0
-                logger.info('===================> restart vllm engine.')
+                logger.info('===================> rank 0 restart vllm engine.')
+                dist.barrier()
+                logger.info('===================> rank 0 finish vllm engine.')
+
                 job_name_remained = str(os.getenv("JOB_NAME_REMAINED"))
-                cmd_remained = str(os.getenv("CMD_REMAINED"))
                 count_remained = int(os.getenv("COUNT_REMAINED"))
                 gpu_remained = int(os.getenv("GPU_REMAINED"))
-                get_all_pid = list(os.getenv("GET_ALL_PID"))
+                get_all_pid = str(os.getenv("GET_ALL_PID"))
+                get_all_pid = get_all_pid.split(',')
+                cmd_remained = str(os.getenv('CMD_REMAINED'))
+                cmd_remained_list = ['python3'+x for x in cmd_remained.split('python3')]
+                cmd_remained_list_origin = [x.replace(',',' ') for x in cmd_remained_list[1:]]
+                cmd_remained_list_origin_new_path = []
 
-                print(f'===================> job_name_remained={job_name_remained}')
-                print(f'===================> cmd_remained={cmd_remained}')
-                print(f'===================> count_remained={count_remained}')
-                print(f'===================> gpu_remained={gpu_remained}')
-                print(f'===================> get_all_pid={get_all_pid}')
+                for path in cmd_remained_list_origin:
+                    arg_list = path.split(' ')
+                    found = False
+                    for index, each_args in enumerate(arg_list):
+                        if found:
+                            found = False
+                            arg_list[index] = meta.path
+                        if each_args=='--model':
+                            found = True
+                    cmd_remained_list_origin_new_path.append(' '.join(arg_list))
 
                 # stop the existed vllm engine
                 from ..launcher.local import terminate_process_and_children, LocalLauncher
@@ -332,23 +344,41 @@ class RemotevLLMEngine(InferenceEngine):
 
                 # TODO replace model path to meta.path # FIXME
 
-
+                launcher.reset_gpu_counter()
                 launcher.submit_array(
                     job_name=job_name_remained,
-                    cmd=cmd_remained,
+                    cmd=cmd_remained_list_origin_new_path,
                     count=count_remained,
                     gpu=gpu_remained,
+                    reset_gpu_counter=True,
+                    new_env=True
                 )
-                launcher.wait()
+                logger.info('Wait for server ready...')
+                for addr in self.addresses:
+                    old_setup_time  = self.config.setup_timeout
+                    self.config.setup_timeout = 3600
+                    self._wait_for_server(addr, sleep_time=5)
+                    self.config.setup_timeout = old_setup_time
+                logger.info('Servers are all ready.')
+
                 self.set_version(meta.model_version)
                 dist.barrier()
                 logger.info(
-                    f"===================> rand {rank} LLM inference server relaunched."
+                    f"===================> rank {rank} LLM inference server relaunched."
                 )
             else:
+                logger.info(
+                    f"===================> rank {rank} wait for restart vLLM, start barrier."
+                )
+                dist.barrier()
+
+                logger.info(
+                    f"===================> rank {rank} wait for restart vLLM, finish barrier."
+                )
+
                 dist.barrier()
                 logger.info(
-                    f"===================> rand {rank} LLM inference server relaunched."
+                    f"===================> rank {rank} LLM inference server relaunched."
                 )
 
             # # Update weights from disk
