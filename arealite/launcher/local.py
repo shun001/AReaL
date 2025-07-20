@@ -298,8 +298,6 @@ def main_local():
     )
 
     print('==============================wait for vLLM start===============================')
-    import time
-    time.sleep(100000)
 
     # Launch trainer entrypoint
     if not cfg.server_only:

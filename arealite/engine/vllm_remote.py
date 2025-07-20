@@ -222,7 +222,7 @@ class RemotevLLMEngine(InferenceEngine):
                 return server
         raise NotImplementedError("Only round-robin scheduling is implemented.")
 
-    async def agenerate(self, req: LLMRequest) -> LLMResponse:
+    async def agenerate(self, req: LLMRequest, tokenizer) -> LLMResponse:
         """Async version of generate using aiohttp."""
         # Prepare request payload
         gconfig = req.gconfig
@@ -235,12 +235,12 @@ class RemotevLLMEngine(InferenceEngine):
 
         # NOTE: rid should NOT be passed in payload
         payload = {
-            "prompt": req.prompt,
+            "prompt": req.input_ids,
             "top_p": gconfig.top_p,
             "top_k": gconfig.top_k,
             "max_tokens": gconfig.max_new_tokens,
             "temperature": 0.0 if gconfig.greedy else gconfig.temperature,
-            # "return_logprob": True,
+            "logprobs": 0,
             "stream": False,
         }
 
@@ -264,41 +264,31 @@ class RemotevLLMEngine(InferenceEngine):
             self.rid_to_address[req.rid] = server_addr
             self.rid_queue.append(req.rid)
 
-        while (
-            stop_reason != "stop"
-            and len(accumulated_output_tokens) < gconfig.max_new_tokens
-        ):
-            logger.info("==================> send request, addr = {0}".format(server_addr))
-            logger.info("==================> send request, payload = {0}".format(payload))
-            # loop until the generation is complete
-            result = await arequest_with_retry(
-                session=self.session,
-                addr=server_addr,
-                endpoint="/v1/completions",
-                payload=payload,
-                method="POST",
-                max_retries=self.config.request_retries,
-                timeout=self.config.request_timeout,
-            )
-            logger.info("==================> result = {0}".format(result))
+        result = await arequest_with_retry(
+            session=self.session,
+            addr=server_addr,
+            endpoint="/v1/completions",
+            payload=payload,
+            method="POST",
+            max_retries=self.config.request_retries,
+            timeout=self.config.request_timeout,
+        )
 
-            # Parse response
-            meta_info = result["meta_info"]
-            output_tokens = [x[1] for x in meta_info["output_token_logprobs"]]
-            output_logprobs = [x[0] for x in meta_info["output_token_logprobs"]]
+        # Parse response
+        meta_info = result["choices"][0]
+        output_tokens_before = meta_info['text']
+        output_tokens = tokenizer.encode(output_tokens_before)
 
-            # Update accumulated outputs
-            accumulated_output_tokens.extend(output_tokens)
-            accumulated_output_logprobs.extend(output_logprobs)
-            # FIXME: Update with actual server versions
-            accumulated_versions.extend([-1] * len(output_tokens))
+        output_logprobs = meta_info['logprobs']['token_logprobs'][:len(output_tokens)] #FIXME logprobs 和output tokens长度不一致
 
-            # Check if generation is complete
-            finish_reason = meta_info["finish_reason"]
-            stop_reason = finish_reason["type"]
+        # Update accumulated outputs
+        accumulated_output_tokens.extend(output_tokens)
+        accumulated_output_logprobs.extend(output_logprobs)
+        # FIXME: Update with actual server versions
+        accumulated_versions.extend([-1] * len(output_tokens))
 
-            payload["prompt"] = payload["prompt"] + result[VLLM_TOKEN_OUTPUT_IDENTIFIER]
-            payload["max_tokens"] -= len(output_tokens)
+        # Check if generation is complete
+        stop_reason = meta_info["finish_reason"]
 
         latency = time.perf_counter() - start_time
 

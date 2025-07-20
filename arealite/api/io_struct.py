@@ -17,7 +17,6 @@ from arealite.api.cli_args import GenerationHyperparameters
 class LLMRequest:
     rid: str = field(default_factory=lambda: str(uuid.uuid4()))
     input_ids: List[int] = field(default_factory=list)
-    prompt: str = field(default_factory=str)
     gconfig: GenerationHyperparameters = field(
         default_factory=GenerationHyperparameters
     )

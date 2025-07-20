@@ -112,10 +112,11 @@ def main_grpo():
     # rollout = RemoteSGLangEngine(config.rollout)
     rollout = RemotevLLMEngine(config.rollout)
     rollout.initialize(None, ft_spec)
-    eval_rollout = RemoteSGLangEngine(config.rollout)
-    eval_rollout.initialize(None, ft_spec)
-    # NOTE: set a large version such that eval does not have any offpolicyness control
-    eval_rollout.set_version(int(1e12))
+    # FIXME
+    # eval_rollout = RemoteSGLangEngine(config.rollout)
+    # eval_rollout.initialize(None, ft_spec)
+    # # NOTE: set a large version such that eval does not have any offpolicyness control
+    # eval_rollout.set_version(int(1e12))
 
     # Initialize train engine
     actor = FSDPPPOActor(config=config.actor)
