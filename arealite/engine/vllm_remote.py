@@ -1,4 +1,5 @@
 import asyncio
+import dis
 import os
 import random
 import threading
@@ -304,24 +305,70 @@ class RemotevLLMEngine(InferenceEngine):
 
     def update_weights(self, meta: WeightUpdateMeta):
         if meta.type == "disk":
-            # Update weights from disk
-            # Use ProcessPool to bypass python GIL for running async coroutines
-            fut = self.executor.submit(
-                update_weights_from_disk,
-                self.config.experiment_name,
-                self.config.trial_name,
-                meta.model_version,
-                self.addresses,
-                meta.path,
-                self.config.request_retries,
-                self.config.request_timeout,
-            )
+            rank = int(os.getenv("RANK"))
+            if rank == 0 :
+                # only restart vllm engine from rank 0
+                logger.info('===================> restart vllm engine.')
+                job_name_remained = str(os.getenv("JOB_NAME_REMAINED"))
+                cmd_remained = str(os.getenv("CMD_REMAINED"))
+                count_remained = int(os.getenv("COUNT_REMAINED"))
+                gpu_remained = int(os.getenv("GPU_REMAINED"))
+                get_all_pid = list(os.getenv("GET_ALL_PID"))
 
-            def callback(fut):
+                print(f'===================> job_name_remained={job_name_remained}')
+                print(f'===================> cmd_remained={cmd_remained}')
+                print(f'===================> count_remained={count_remained}')
+                print(f'===================> gpu_remained={gpu_remained}')
+                print(f'===================> get_all_pid={get_all_pid}')
+
+                # stop the existed vllm engine
+                from ..launcher.local import terminate_process_and_children, LocalLauncher
+                for pid in get_all_pid:
+                    terminate_process_and_children(int(pid), signal="SIGTERM")
+
+                launcher = LocalLauncher(self.config.experiment_name, self.config.trial_name, self.config.fileroot)
+                # restart
+
+
+                # TODO replace model path to meta.path # FIXME
+
+
+                launcher.submit_array(
+                    job_name=job_name_remained,
+                    cmd=cmd_remained,
+                    count=count_remained,
+                    gpu=gpu_remained,
+                )
+                launcher.wait()
                 self.set_version(meta.model_version)
+                dist.barrier()
+                logger.info(
+                    f"===================> rand {rank} LLM inference server relaunched."
+                )
+            else:
+                dist.barrier()
+                logger.info(
+                    f"===================> rand {rank} LLM inference server relaunched."
+                )
 
-            fut.add_done_callback(callback)
-            return fut
+            # # Update weights from disk
+            # # Use ProcessPool to bypass python GIL for running async coroutines
+            # fut = self.executor.submit(
+            #     update_weights_from_disk,
+            #     self.config.experiment_name,
+            #     self.config.trial_name,
+            #     meta.model_version,
+            #     self.addresses,
+            #     meta.path,
+            #     self.config.request_retries,
+            #     self.config.request_timeout,
+            # )
+            #
+            # def callback(fut):
+            #     self.set_version(meta.model_version)
+            #
+            # fut.add_done_callback(callback)
+            # return fut
         else:
             raise NotImplementedError(f"Unsupported weight update type: {meta.type}")
 

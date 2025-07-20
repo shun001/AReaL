@@ -17,6 +17,8 @@ async_training: true
 rollout:
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+
   max_concurrent_rollouts: 256
   queue_size: null
   consumer_batch_size: ${train_dataset.batch_size}

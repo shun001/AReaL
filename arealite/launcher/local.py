@@ -153,6 +153,13 @@ class LocalLauncher:
             self._jobs.pop(k)
             del p
 
+    def get_all_pid(self):
+        pid_list = []
+        for k, eeach_process in self._jobs.items():
+            for p in eeach_process:
+                pid_list.append(p.pid)
+        return pid_list
+
     def stop_all(self, signal=None):
         # signal argument is ignored in local stop_all
         for name in self._job_counter:
@@ -305,7 +312,13 @@ def main_local():
             job_name="trainer",
             cmd=f"torchrun --nnodes 1 --nproc-per-node {alloc_mode.train_world_size} --standalone {' '.join(sys.argv[1:])}",
             gpu=alloc_mode.train_world_size,
-            env_vars=dict(AREAL_LLM_SERVER_ADDRS=",".join(server_addrs)),
+            env_vars=dict(
+                JOB_NAME_REMAINED="llm_server",
+                CMD_REMAINED=server_cmd,
+                COUNT_REMAINED=alloc_mode.gen_dp_size,
+                GPU_REMAINED=alloc_mode.gen_pp_size * alloc_mode.gen_tp_size,
+                GET_ALL_PID=launcher.get_all_pid(),
+                AREAL_LLM_SERVER_ADDRS=",".join(server_addrs)),
         )
 
     try:

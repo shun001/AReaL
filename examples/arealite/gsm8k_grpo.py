@@ -205,10 +205,10 @@ def main_grpo():
                 model_version=global_step + 1,
             )
             if dist.get_rank() == 0:
-                future = rollout.update_weights(meta)
+                rollout.update_weights(meta)
             actor.upload_weights(meta)
-            if dist.get_rank() == 0:
-                future.result()
+            # if dist.get_rank() == 0:
+            #     future.result()
             dist.barrier()
             torch.cuda.synchronize()
             rollout.set_version(global_step + 1)
@@ -248,7 +248,8 @@ def main_grpo():
         logger.commit(epoch, step, global_step, stats)
 
     logger.close()
-    eval_rollout.destroy()
+    # FIXME
+    # eval_rollout.destroy()
     rollout.destroy()
     if ref is not None:
         ref.destroy()
