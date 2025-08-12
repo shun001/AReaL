@@ -1,6 +1,13 @@
 import os
 import re
 import sys
+import logging
+
+# Configure logging BEFORE other imports
+logging.getLogger("arealite.engine.vllm_remote").setLevel(logging.CRITICAL)
+logging.getLogger("urllib3.connectionpool").setLevel(logging.CRITICAL)
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+logging.getLogger("uvicorn").setLevel(logging.WARNING)
 
 import torch
 from arealite.utils.device import is_npu_available
@@ -36,7 +43,7 @@ def process_gsm8k_rl_dataset(dataset: Dataset):
 
 
 def get_gsm8k_dataset(split, rank, world_size):
-    dataset = load_dataset(path="/data1/s00580798/datasets/gsm8k", name="main", split=split)
+    dataset = load_dataset(path="/home/b84412626/datasets--openai--gsm8k", name="main", split=split)
     dataset = split_dataset_by_node(dataset, rank=rank, world_size=world_size)
     return process_gsm8k_rl_dataset(dataset)
 
@@ -212,8 +219,9 @@ def main_grpo():
 
             # FIXME meta.path 需要更新，不能使用sglang的路径
 
-            rollout.update_weights(meta)
+            
             actor.upload_weights(meta)
+            rollout.update_weights(meta)
             # if dist.get_rank() == 0:
             #     future.result()
             dist.barrier()

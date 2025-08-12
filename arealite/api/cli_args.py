@@ -50,7 +50,7 @@ class GenerationHyperparameters:
         default=1, metadata={"help": "Number of sequences to generate per prompt."}
     )
     max_new_tokens: int = field(
-        default=16384, metadata={"help": "Maximum number of tokens to generate."}
+        default=8192, metadata={"help": "Maximum number of tokens to generate."}
     )
     min_new_tokens: int = field(
         default=0, metadata={"help": "Minimum number of tokens to generate."}
@@ -382,7 +382,7 @@ class vLLMConfig:
     block_size: int = 16
     swap_space: int = 4
     cpu_offload_gb: float = 0
-    max_seq_len_to_capture: int = 32768
+    max_seq_len_to_capture: int = 2048
 
     disable_sliding_window: bool = True
 

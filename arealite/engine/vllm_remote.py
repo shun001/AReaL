@@ -227,6 +227,7 @@ class RemotevLLMEngine(InferenceEngine):
         """Async version of generate using aiohttp."""
         # Prepare request payload
         gconfig = req.gconfig
+        stop_token_ids = gconfig.stop_token_ids
 
         if gconfig.n_samples != 1:
             raise ValueError(
@@ -234,7 +235,12 @@ class RemotevLLMEngine(InferenceEngine):
                 "Please call generate for multiple times with n_samples = 1."
             )
 
-        # NOTE: rid should NOT be passed in payload
+        # Convert stop_token_ids to strings if provided
+        stop_sequences = None
+        if stop_token_ids:
+            stop_sequences = [tokenizer.decode([token_id]) for token_id in stop_token_ids]
+
+        # NOTE: rid should NOT be passed in payload  
         payload = {
             "prompt": req.input_ids,
             "top_p": gconfig.top_p,
@@ -244,6 +250,10 @@ class RemotevLLMEngine(InferenceEngine):
             "logprobs": 0,
             "stream": False,
         }
+        
+        # Add stop parameter only if we have valid stop sequences
+        if stop_sequences:
+            payload["stop"] = stop_sequences
 
         # Make request
         start_time = time.perf_counter()
@@ -253,6 +263,7 @@ class RemotevLLMEngine(InferenceEngine):
 
         # Deal with rollout interruption
         stop_reason = "length"
+        iteration_count = 0
 
         if req.rid in self.rid_to_address:
             server_addr = self.rid_to_address[req.rid]
@@ -265,32 +276,53 @@ class RemotevLLMEngine(InferenceEngine):
             self.rid_to_address[req.rid] = server_addr
             self.rid_queue.append(req.rid)
 
-        result = await arequest_with_retry(
-            session=self.session,
-            addr=server_addr,
-            endpoint="/v1/completions",
-            payload=payload,
-            method="POST",
-            max_retries=self.config.request_retries,
-            timeout=self.config.request_timeout,
-        )
+        while (
+            stop_reason != "stop"
+            and len(accumulated_output_tokens) < gconfig.max_new_tokens
+        ):
+            iteration_count += 1
+          
+            # loop until the generation is complete
+            result = await arequest_with_retry(
+                session=self.session,
+                addr=server_addr,
+                endpoint="/v1/completions",
+                payload=payload,
+                method="POST",
+                max_retries=self.config.request_retries,
+                timeout=self.config.request_timeout,
+            )
 
-        # Parse response
-        meta_info = result["choices"][0]
-        output_tokens_before = meta_info['text']
-        output_tokens = tokenizer.encode(output_tokens_before)
+            # Parse response
+            meta_info = result["choices"][0]
+            vllm_tokens = meta_info["logprobs"]["tokens"]
+            output_tokens_before = meta_info['text']
+            output_tokens = tokenizer.convert_tokens_to_ids(vllm_tokens)
+            output_logprobs = meta_info["logprobs"]["token_logprobs"]
 
-        output_logprobs = meta_info['logprobs']['token_logprobs'][:len(output_tokens)] #FIXME logprobs 和output tokens长度不一致
+            # Update accumulated outputs
+            accumulated_output_tokens.extend(output_tokens)
+            accumulated_output_logprobs.extend(output_logprobs)
+            # FIXME: Update with actual server versions
+            accumulated_versions.extend([-1] * len(output_tokens))
 
-        # Update accumulated outputs
-        accumulated_output_tokens.extend(output_tokens)
-        accumulated_output_logprobs.extend(output_logprobs)
-        # FIXME: Update with actual server versions
-        accumulated_versions.extend([-1] * len(output_tokens))
+            # Check if generation is complete
+            stop_reason = meta_info["finish_reason"]
 
-        # Check if generation is complete
-        stop_reason = meta_info["finish_reason"]
+            # Update payload for next iteration if needed
+            if stop_reason != "stop" and len(accumulated_output_tokens) < gconfig.max_new_tokens:
+                # continue generation without logging
+                # Update prompt with generated tokens for next request
+                payload["prompt"] = req.input_ids + accumulated_output_tokens
+                payload["max_tokens"] = gconfig.max_new_tokens - len(accumulated_output_tokens)
+                # Keep the stop parameter unchanged for subsequent requests
+                if stop_sequences:
+                    payload["stop"] = stop_sequences
+            else:
+                # generation finished
+                pass
 
+        
         latency = time.perf_counter() - start_time
 
         return LLMResponse(
@@ -315,8 +347,8 @@ class RemotevLLMEngine(InferenceEngine):
                 job_name_remained = str(os.getenv("JOB_NAME_REMAINED"))
                 count_remained = int(os.getenv("COUNT_REMAINED"))
                 gpu_remained = int(os.getenv("GPU_REMAINED"))
-                get_all_pid = str(os.getenv("GET_ALL_PID"))
-                get_all_pid = get_all_pid.split(',')
+                get_all_pid_raw = str(os.getenv("GET_ALL_PID"))
+                get_all_pid = [p for p in get_all_pid_raw.split(',') if p]
                 cmd_remained = str(os.getenv('CMD_REMAINED'))
                 cmd_remained_list = ['python3'+x for x in cmd_remained.split('python3')]
                 cmd_remained_list_origin = [x.replace(',',' ') for x in cmd_remained_list[1:]]
@@ -335,9 +367,54 @@ class RemotevLLMEngine(InferenceEngine):
 
                 # stop the existed vllm engine
                 from ..launcher.local import terminate_process_and_children, LocalLauncher
+                import time
+                import gc
+                import torch
+                
+                # 扩展 pid 列表: 仅初始 pid 及其子孙，避免误杀其他进程（去掉端口扫描导致的过度匹配）
+                try:
+                    import psutil  # type: ignore
+                except Exception:
+                    psutil = None
+                expanded_pids = set()
                 for pid in get_all_pid:
-                    terminate_process_and_children(int(pid), signal="SIGTERM")
+                    try:
+                        ipid = int(pid)
+                    except ValueError:
+                        continue
+                    expanded_pids.add(ipid)
+                    if psutil:
+                        try:
+                            parent = psutil.Process(ipid)
+                            for child in parent.children(recursive=True):
+                                expanded_pids.add(child.pid)
+                        except psutil.Error:
+                            pass
+              
+                # First graceful shutdown then hard kill fallback
+                logger.info(f"Attempting graceful shutdown of vLLM root/child processes (total {len(expanded_pids)})...")
+                for pid in list(expanded_pids):
+                    try:
+                        terminate_process_and_children(int(pid), signal="SIGTERM")
+                    except Exception as e:
+                        logger.debug(f"SIGTERM failed for {pid}: {e}")
+                time.sleep(5)
+                # 强制 kill 避免残留
+                for pid in list(expanded_pids):
+                    try:
+                        terminate_process_and_children(int(pid), signal="SIGKILL")
+                    except Exception:
+                        pass
+                time.sleep(2)
+                # torch.cuda.synchronize()
+                # torch.cuda.empty_cache()
+                # logger.info('Empty cache...')
+                # gc.collect()
+                # torch.cuda.empty_cache()
+                # torch.cuda.reset_peak_memory_stats()
+                # logger.info('Reser peak memory...')
 
+                logger.warning('Start to load new vllm...')
                 launcher = LocalLauncher(self.config.experiment_name, self.config.trial_name, self.config.fileroot)
                 # restart
 
@@ -353,6 +430,13 @@ class RemotevLLMEngine(InferenceEngine):
                     reset_gpu_counter=True,
                     new_env=True
                 )
+                # 记录新的 server 根 pid 供下一次更新使用
+                try:
+                    new_pids = launcher.get_all_pid()
+                    os.environ['GET_ALL_PID'] = ','.join(new_pids)
+                    logger.info(f"Updated GET_ALL_PID -> {new_pids}")
+                except Exception as e:
+                    logger.warning(f"Failed to refresh GET_ALL_PID: {e}")
                 logger.info('Wait for server ready...')
                 for addr in self.addresses:
                     old_setup_time  = self.config.setup_timeout

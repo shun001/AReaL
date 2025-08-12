@@ -5,12 +5,12 @@ allocation_mode: vllm.d4p1t1+d4p1t1
 n_nodes: 1
 n_gpus_per_node: 8
 cluster:
-  fileroot: /data1/l00691321/arealite/experiments
+  fileroot: /data/b84412626/experiments
   name_resolve:
     type: nfs
-    nfs_record_root: /data1/l00691321/areal/name_resolve
+    nfs_record_root: /data/b84412626/name_resolve
 seed: 1
-total_train_epochs: 10
+total_train_epochs: 4
 tokenizer_path: ${actor.path}
 async_training: true
 
@@ -31,11 +31,10 @@ gconfig:
   max_new_tokens: 512
   greedy: false
   temperature: 1.0
-
 actor:
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
-  path: /data1/l00691321/models/Qwen2-1.5B-Instruct
+  path: /home/b84412626/Qwen2-1.5B-Instruct
   init_from_scratch: false
   disable_dropout: true
   gradient_checkpointing: false
@@ -93,9 +92,12 @@ vllm:
   seed: ${seed}
   skip_tokenizer_init: false
   dtype: ${actor.dtype}
-  max_model_len: 32768
+  max_model_len: 8192
   gpu_memory_utilization: 0.9
-
+#  max_num_seqs: 64
+#  cpu_offload_gb: 2.0
+#  disable_sliding_window: true
+#  disable_log_requests: true
 
 # datasets
 train_dataset:
@@ -103,7 +105,7 @@ train_dataset:
   shuffle: true
   pin_memory: true
 
-valid_dataset: 
+valid_dataset:
   batch_size: 256
   shuffle: true
   pin_memory: true
